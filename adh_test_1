@@ -1,0 +1,96 @@
+with click_base as (
+    select
+      imp.device_id_md5 device_id,
+      imp.ad_group_creative_id creative_id,
+      --imp.location.geo_region geo_region,
+      imp.demographics.age_group age_group,
+      imp.demographics.gender gender,
+      sum(click.advertiser_click_cost_usd) cost,
+      count(click.click_id) interactions
+    from adh.google_ads_impressions_rdid imp
+    left join 
+      adh.google_ads_clicks_rdid click 
+    	on imp.query_id = click.query_id
+    where imp.device_id_md5 is not null 
+    group by 1, 2,3,4
+  ),
+
+affinity_base as
+  (
+	 select
+    imp.device_id_md5 device_id,
+    imp.ad_group_creative_id creative_id,
+    --imp.location.geo_region geo_region,
+    --imp.demographics.age_group age_group,
+    --imp.demographics.gender gender,
+    flattened_affinity,
+    count(*) impressions,
+    max(user.iaps) iaps,
+    max(user.revenue) revenue,
+    max(user.day2_retention) day2_retention,
+    max(user.day7_retention) day7_retention
+    from adh.google_ads_impressions_rdid imp
+    
+    left join `specialwarships.client_dataset.client_data` user
+      on upper(to_hex(md5(upper(user.device_id)))) = upper(imp.device_id_md5)
+      and user.first_open_time * 1000000 > imp.query_id.time_usec
+     
+		CROSS JOIN UNNEST(imp.affinity) AS flattened_affinity
+ 
+    where imp.device_id_md5 is not null
+    group by 1,2,3
+),
+
+base as
+  (
+    select a.*,
+    click.age_group,
+    click.gender,
+    click.cost,
+    click.interactions
+    from affinity_base a
+    left join click_base click using(device_id, creative_id)
+    )
+
+select 
+    a.affinity_category,
+    a.affinity_name,
+    --r.country_code,
+    age.age_group_name,
+    g.gender_name,
+    ctv.video_message.youtube_video_id video_id,
+  	ctv.video_message.video_ad_duration video_ad_duration,
+    sum(base.iaps) iaps,
+    sum(base.revenue) revenue,
+    sum(base.cost) cost,
+    sum(base.interactions) interactions,
+    sum(base.impressions) impressions,
+    count(distinct base.device_id) installs,
+    count(base.device_id) users,
+    sum(day2_retention) day2_retention,
+    sum(day7_retention) day7_retention
+from base  
+
+  left join adh.google_ads_adgroupcreative agc
+         on base.creative_id = agc.ad_group_creative_id
+  
+   left join adh.google_ads_creative ctv 
+         on agc.creative_id = ctv.creative_id
+
+   left join adh.affinity a
+		on a.affinity_id = base.flattened_affinity
+ 		 
+    /*
+    left join adh.region r
+    on base.geo_region = r.region_name
+    */
+    
+    left join adh.age_group age
+    on base.age_group = age.age_group_id
+    
+    left join adh.gender g
+    on base.gender = g.gender_id 
+
+
+where ctv.video_message.youtube_video_id is not null
+group by 1,2,3,4,5,6
